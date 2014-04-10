@@ -464,7 +464,7 @@ class FOSElasticaExtension extends Extension
         $typeConfig['listener']['flush'] = true;
 
         switch ($typeConfig['driver']) {
-            case 'orm':
+            case 'orm': case 'phpcrodm':
                 $eventsClass = '\Doctrine\ORM\Events';
                 break;
             case 'mongodb':
