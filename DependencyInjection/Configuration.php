@@ -15,11 +15,16 @@ class Configuration implements ConfigurationInterface
      */
     private $supportedDrivers = array('orm', 'mongodb', 'propel', 'phpcrodm');
 
-    private $configArray = array();
+    /**
+     * If the kernel is running in debug mode.
+     *
+     * @var bool
+     */
+    private $debug;
 
-    public function __construct($configArray)
+    public function __construct($debug)
     {
-        $this->configArray = $configArray;
+        $this->debug = $debug;
     }
 
     /**
@@ -58,16 +63,6 @@ class Configuration implements ConfigurationInterface
     }
 
     /**
-     * Generates the configuration tree.
-     *
-     * @return \Symfony\Component\DependencyInjection\Configuration\NodeInterface
-     */
-    public function getConfigTree()
-    {
-        return $this->getConfigTreeBuilder()->buildTree();
-    }
-
-    /**
      * Adds the configuration for the "clients" key
      */
     private function addClientsSection(ArrayNodeDefinition $rootNode)
@@ -80,28 +75,18 @@ class Configuration implements ConfigurationInterface
                     ->prototype('array')
                         ->performNoDeepMerging()
                         ->beforeNormalization()
-                            ->ifTrue(function($v) { return isset($v['host']) && isset($v['port']); })
+                            ->ifTrue(function($v) { return (isset($v['host']) && isset($v['port'])) || isset($v['url']); })
                             ->then(function($v) {
                                 return array(
                                     'servers' => array(
                                         array(
-                                            'host'   => $v['host'],
-                                            'port'   => $v['port'],
+                                            'host' => isset($v['host']) ? $v['host'] : null,
+                                            'port' => isset($v['port']) ? $v['port'] : null,
+                                            'url' => isset($v['url']) ? $v['url'] : null,
                                             'logger' => isset($v['logger']) ? $v['logger'] : null,
                                             'headers' => isset($v['headers']) ? $v['headers'] : null,
-                                        )
-                                    )
-                                );
-                            })
-                        ->end()
-                        ->beforeNormalization()
-                            ->ifTrue(function($v) { return isset($v['url']); })
-                            ->then(function($v) {
-                                return array(
-                                    'servers' => array(
-                                        array(
-                                            'url'    => $v['url'],
-                                            'logger' => isset($v['logger']) ? $v['logger'] : null
+                                            'timeout' => isset($v['timeout']) ? $v['timeout'] : null,
+                                            'transport' => isset($v['transport']) ? $v['transport'] : null,
                                         )
                                     )
                                 );
@@ -114,14 +99,15 @@ class Configuration implements ConfigurationInterface
                                     ->children()
                                         ->scalarNode('url')
                                             ->validate()
-                                                ->ifTrue(function($url) { return substr($url, -1) !== '/'; })
+                                                ->ifTrue(function($url) { return $url && substr($url, -1) !== '/'; })
                                                 ->then(function($url) { return $url.'/'; })
                                             ->end()
                                         ->end()
                                         ->scalarNode('host')->end()
                                         ->scalarNode('port')->end()
+                                        ->scalarNode('proxy')->end()
                                         ->scalarNode('logger')
-                                            ->defaultValue('%kernel.debug%')
+                                            ->defaultValue($this->debug ? 'fos_elastica.logger' : false)
                                             ->treatNullLike('fos_elastica.logger')
                                             ->treatTrueLike('fos_elastica.logger')
                                         ->end()
@@ -129,6 +115,7 @@ class Configuration implements ConfigurationInterface
                                             ->useAttributeAsKey('name')
                                             ->prototype('scalar')->end()
                                         ->end()
+                                        ->scalarNode('transport')->end()
                                         ->scalarNode('timeout')->end()
                                     ->end()
                                 ->end()
@@ -167,61 +154,8 @@ class Configuration implements ConfigurationInterface
                                 ->children()
                                     ->scalarNode('index_analyzer')->end()
                                     ->scalarNode('search_analyzer')->end()
-                                    ->arrayNode('persistence')
-                                        ->validate()
-                                            ->ifTrue(function($v) { return isset($v['driver']) && 'propel' === $v['driver'] && isset($v['listener']); })
-                                            ->thenInvalid('Propel doesn\'t support listeners')
-                                            ->ifTrue(function($v) { return isset($v['driver']) && 'propel' === $v['driver'] && isset($v['repository']); })
-                                            ->thenInvalid('Propel doesn\'t support the "repository" parameter')
-                                        ->end()
-                                        ->children()
-                                            ->scalarNode('driver')
-                                                ->validate()
-                                                    ->ifNotInArray($this->supportedDrivers)
-                                                    ->thenInvalid('The driver %s is not supported. Please choose one of '.json_encode($this->supportedDrivers))
-                                                ->end()
-                                            ->end()
-                                            ->scalarNode('identifier')->defaultValue('id')->end()
-                                            ->arrayNode('provider')
-                                                ->children()
-                                                    ->scalarNode('query_builder_method')->defaultValue('createQueryBuilder')->end()
-                                                    ->scalarNode('batch_size')->defaultValue(100)->end()
-                                                    ->scalarNode('clear_object_manager')->defaultTrue()->end()
-                                                    ->scalarNode('service')->end()
-                                                ->end()
-                                            ->end()
-                                            ->arrayNode('listener')
-                                                ->children()
-                                                    ->scalarNode('insert')->defaultTrue()->end()
-                                                    ->scalarNode('update')->defaultTrue()->end()
-                                                    ->scalarNode('delete')->defaultTrue()->end()
-                                                    ->scalarNode('persist')->defaultValue('postFlush')->end()
-                                                    ->scalarNode('service')->end()
-                                                    ->variableNode('is_indexable_callback')->defaultNull()->end()
-                                                ->end()
-                                            ->end()
-                                            ->arrayNode('finder')
-                                                ->children()
-                                                    ->scalarNode('service')->end()
-                                                ->end()
-                                            ->end()
-                                            ->arrayNode('elastica_to_model_transformer')
-                                                ->addDefaultsIfNotSet()
-                                                ->children()
-                                                    ->scalarNode('hydrate')->defaultTrue()->end()
-                                                    ->scalarNode('ignore_missing')->defaultFalse()->end()
-                                                    ->scalarNode('query_builder_method')->defaultValue('createQueryBuilder')->end()
-                                                    ->scalarNode('service')->end()
-                                                ->end()
-                                            ->end()
-                                            ->arrayNode('model_to_elastica_transformer')
-                                                ->addDefaultsIfNotSet()
-                                                ->children()
-                                                    ->scalarNode('service')->end()
-                                                ->end()
-                                            ->end()
-                                        ->end()
-                                    ->end()
+                                    ->append($this->getPersistenceNode())
+                                    ->append($this->getSerializerNode())
                                 ->end()
                             ->end()
                             ->variableNode('settings')->defaultValue(array())->end()
@@ -245,79 +179,38 @@ class Configuration implements ConfigurationInterface
             ->useAttributeAsKey('name')
             ->prototype('array')
                 ->treatNullLike(array())
+                // BC - Renaming 'mappings' node to 'properties'
+                ->beforeNormalization()
+                ->ifTrue(function($v) { return isset($v['mappings']); })
+                ->then(function($v) {
+                    $v['properties'] = $v['mappings'];
+                    unset($v['mappings']);
+
+                    return $v;
+                })
+                ->end()
+                ->beforeNormalization()
+                ->ifTrue(function ($v) {
+                    return isset($v['persistence']) &&
+                        isset($v['persistence']['listener']) &&
+                        isset($v['persistence']['listener']['is_indexable_callback']);
+                })
+                ->then(function ($v) {
+                    $v['indexable_callback'] = $v['persistence']['listener']['is_indexable_callback'];
+                    unset($v['persistence']['listener']['is_indexable_callback']);
+
+                    return $v;
+                })
+                ->end()
                 ->children()
-                    ->arrayNode('serializer')
-                        ->addDefaultsIfNotSet()
-                        ->children()
-                            ->arrayNode('groups')
-                                ->treatNullLike(array())
-                                ->prototype('scalar')->end()
-                            ->end()
-                            ->scalarNode('version')->end()
-                        ->end()
-                    ->end()
                     ->scalarNode('index_analyzer')->end()
                     ->scalarNode('search_analyzer')->end()
-                    ->arrayNode('persistence')
-                        ->validate()
-                            ->ifTrue(function($v) { return isset($v['driver']) && 'propel' === $v['driver'] && isset($v['listener']); })
-                            ->thenInvalid('Propel doesn\'t support listeners')
-                            ->ifTrue(function($v) { return isset($v['driver']) && 'propel' === $v['driver'] && isset($v['repository']); })
-                            ->thenInvalid('Propel doesn\'t support the "repository" parameter')
-                        ->end()
-                        ->children()
-                            ->scalarNode('driver')
-                                ->validate()
-                                    ->ifNotInArray($this->supportedDrivers)
-                                    ->thenInvalid('The driver %s is not supported. Please choose one of '.json_encode($this->supportedDrivers))
-                                ->end()
-                            ->end()
-                            ->scalarNode('model')->end()
-                            ->scalarNode('repository')->end()
-                            ->scalarNode('identifier')->defaultValue('id')->end()
-                            ->arrayNode('provider')
-                                ->children()
-                                    ->scalarNode('query_builder_method')->defaultValue('createQueryBuilder')->end()
-                                    ->scalarNode('batch_size')->defaultValue(100)->end()
-                                    ->scalarNode('clear_object_manager')->defaultTrue()->end()
-                                    ->scalarNode('service')->end()
-                                ->end()
-                            ->end()
-                            ->arrayNode('listener')
-                                ->children()
-                                    ->scalarNode('insert')->defaultTrue()->end()
-                                    ->scalarNode('update')->defaultTrue()->end()
-                                    ->scalarNode('delete')->defaultTrue()->end()
-                                    ->booleanNode('immediate')->defaultFalse()->end()
-                                    ->scalarNode('service')->end()
-                                    ->variableNode('is_indexable_callback')->defaultNull()->end()
-                                ->end()
-                            ->end()
-                            ->arrayNode('finder')
-                                ->children()
-                                    ->scalarNode('service')->end()
-                                ->end()
-                            ->end()
-                            ->arrayNode('elastica_to_model_transformer')
-                                ->addDefaultsIfNotSet()
-                                ->children()
-                                    ->scalarNode('hydrate')->defaultTrue()->end()
-                                    ->scalarNode('ignore_missing')->defaultFalse()->end()
-                                    ->scalarNode('query_builder_method')->defaultValue('createQueryBuilder')->end()
-                                    ->scalarNode('service')->end()
-                                ->end()
-                            ->end()
-                            ->arrayNode('model_to_elastica_transformer')
-                                ->addDefaultsIfNotSet()
-                                ->children()
-                                    ->scalarNode('service')->end()
-                                ->end()
-                            ->end()
-                        ->end()
-                    ->end()
+                    ->scalarNode('indexable_callback')->end()
+                    ->append($this->getPersistenceNode())
+                    ->append($this->getSerializerNode())
                 ->end()
                 ->append($this->getIdNode())
-                ->append($this->getMappingsNode())
+                ->append($this->getPropertiesNode())
                 ->append($this->getDynamicTemplateNode())
                 ->append($this->getSourceNode())
                 ->append($this->getBoostNode())
@@ -333,27 +226,17 @@ class Configuration implements ConfigurationInterface
     }
 
     /**
-     * Returns the array node used for "mappings".
+     * Returns the array node used for "properties".
      */
-    protected function getMappingsNode()
+    protected function getPropertiesNode()
     {
         $builder = new TreeBuilder();
-        $node = $builder->root('mappings');
+        $node = $builder->root('properties');
 
-        $nestings = $this->getNestings();
-
-        $childrenNode = $node
+        $node
             ->useAttributeAsKey('name')
-            ->prototype('array')
-                ->validate()
-                ->ifTrue(function($v) { return isset($v['fields']) && empty($v['fields']); })
-                    ->then(function($v) { unset($v['fields']); return $v; })
-                ->end()
-                ->treatNullLike(array())
-                ->addDefaultsIfNotSet()
-                ->children();
-
-        $this->addFieldConfig($childrenNode, $nestings);
+            ->prototype('variable')
+                ->treatNullLike(array());
 
         return $node;
     }
@@ -376,200 +259,12 @@ class Configuration implements ConfigurationInterface
                     ->scalarNode('path_match')->end()
                     ->scalarNode('path_unmatch')->end()
                     ->scalarNode('match_pattern')->end()
-                    ->append($this->getDynamicTemplateMapping())
+                    ->append($this->getPropertiesNode())
                 ->end()
             ->end()
         ;
 
         return $node;
-    }
-
-    /**
-     * @return the array node used for mapping in dynamic templates
-     */
-    protected function getDynamicTemplateMapping()
-    {
-        $builder = new TreeBuilder();
-        $node = $builder->root('mapping');
-
-        $nestings = $this->getNestingsForDynamicTemplates();
-
-        $this->addFieldConfig($node->children(), $nestings);
-
-        return $node;
-    }
-
-    /**
-     * @param \Symfony\Component\Config\Definition\Builder\NodeBuilder $node The node to which to attach the field config to
-     * @param array $nestings the nested mappings for the current field level
-     */
-    protected function addFieldConfig($node, $nestings)
-    {
-        $node
-            ->scalarNode('type')->defaultValue('string')->end()
-            ->scalarNode('boost')->end()
-            ->scalarNode('store')->end()
-            ->scalarNode('index')->end()
-            ->scalarNode('index_analyzer')->end()
-            ->scalarNode('search_analyzer')->end()
-            ->scalarNode('analyzer')->end()
-            ->scalarNode('term_vector')->end()
-            ->scalarNode('null_value')->end()
-            ->booleanNode('include_in_all')->defaultValue(true)->end()
-            ->booleanNode('enabled')->defaultValue(true)->end()
-            ->scalarNode('lat_lon')->end()
-            ->scalarNode('index_name')->end()
-            ->booleanNode('omit_norms')->end()
-            ->scalarNode('index_options')->end()
-            ->scalarNode('ignore_above')->end()
-            ->scalarNode('position_offset_gap')->end()
-            ->arrayNode('_parent')
-                ->treatNullLike(array())
-                ->children()
-                    ->scalarNode('type')->end()
-                    ->scalarNode('identifier')->defaultValue('id')->end()
-                ->end()
-            ->end()
-            ->scalarNode('format')->end()
-            ->scalarNode('similarity')->end();
-        ;
-
-        if (isset($nestings['fields'])) {
-            $this->addNestedFieldConfig($node, $nestings, 'fields');
-        }
-
-        if (isset($nestings['properties'])) {
-            $node
-                ->booleanNode('include_in_parent')->end()
-                ->booleanNode('include_in_root')->end()
-            ;
-            $this->addNestedFieldConfig($node, $nestings, 'properties');
-        }
-    }
-
-    /**
-     * @param \Symfony\Component\Config\Definition\Builder\NodeBuilder $node The node to which to attach the nested config to
-     * @param array $nestings The nestings for the current field level
-     * @param string $property the name of the nested property ('fields' or 'properties')
-     */
-    protected function addNestedFieldConfig($node, $nestings, $property)
-    {
-        $childrenNode = $node
-            ->arrayNode($property)
-                ->useAttributeAsKey('name')
-                ->prototype('array')
-                    ->validate()
-                        ->ifTrue(function($v) { return isset($v['fields']) && empty($v['fields']); })
-                        ->then(function($v) { unset($v['fields']); return $v; })
-                    ->end()
-                    ->treatNullLike(array())
-                    ->addDefaultsIfNotSet()
-                    ->children();
-
-        $this->addFieldConfig($childrenNode, $nestings[$property]);
-
-        $childrenNode
-                    ->end()
-                ->end()
-            ->end()
-        ;
-    }
-
-    /**
-     * @return array The unique nested mappings for all types
-     */
-    protected function getNestings()
-    {
-        if (!isset($this->configArray[0]['indexes'])) {
-            return array();
-        }
-
-        $nestings = array();
-        foreach ($this->configArray[0]['indexes'] as $index) {
-            if (empty($index['types'])) {
-                continue;
-            }
-
-            foreach ($index['types'] as $type) {
-                if (empty($type['mappings'])) {
-                    continue;
-                }
-
-                $nestings = array_merge_recursive($nestings, $this->getNestingsForType($type['mappings'], $nestings));
-            }
-        }
-        return $nestings;
-    }
-
-    /**
-     * @return array The unique nested mappings for all dynamic templates
-     */
-    protected function getNestingsForDynamicTemplates()
-    {
-        if (!isset($this->configArray[0]['indexes'])) {
-            return array();
-        }
-
-        $nestings = array();
-        foreach ($this->configArray[0]['indexes'] as $index) {
-            if (empty($index['types'])) {
-                continue;
-            }
-
-            foreach ($index['types'] as $type) {
-                if (empty($type['dynamic_templates'])) {
-                    continue;
-                }
-
-                foreach ($type['dynamic_templates'] as $definition) {
-                    $field = $definition['mapping'];
-
-                    if (isset($field['fields'])) {
-                        $this->addPropertyNesting($field, $nestings, 'fields');
-                    } else if (isset($field['properties'])) {
-                        $this->addPropertyNesting($field, $nestings, 'properties');
-                    }
-                }
-
-            }
-        }
-        return $nestings;
-    }
-
-    /**
-     * @param array $mappings The mappings for the current type
-     * @return array The nested mappings defined for this type
-     */
-    protected function getNestingsForType(array $mappings = null)
-    {
-        if ($mappings === null) {
-            return array();
-        }
-
-        $nestings = array();
-
-        foreach ($mappings as $field) {
-            if (isset($field['fields'])) {
-                $this->addPropertyNesting($field, $nestings, 'fields');
-            } else if (isset($field['properties'])) {
-                $this->addPropertyNesting($field, $nestings, 'properties');
-            }
-        }
-
-        return $nestings;
-    }
-
-    /**
-     * @param array $field      The field mapping definition
-     * @param array $nestings   The nestings array
-     * @param string $property  The nested property name ('fields' or 'properties')
-     */
-    protected function addPropertyNesting($field, &$nestings, $property)
-    {
-        if (!isset($nestings[$property])) {
-            $nestings[$property] = array();
-        }
-        $nestings[$property] = array_merge_recursive($nestings[$property], $this->getNestingsForType($field[$property]));
     }
 
     /**
@@ -609,7 +304,7 @@ class Configuration implements ConfigurationInterface
                 ->end()
                 ->scalarNode('compress')->end()
                 ->scalarNode('compress_threshold')->end()
-                ->scalarNode('enabled')->end()
+                ->scalarNode('enabled')->defaultTrue()->end()
             ->end()
         ;
 
@@ -682,6 +377,8 @@ class Configuration implements ConfigurationInterface
         $node
             ->children()
             ->scalarNode('enabled')->defaultValue(true)->end()
+            ->scalarNode('index_analyzer')->end()
+            ->scalarNode('search_analyzer')->end()
             ->end()
         ;
 
@@ -725,6 +422,100 @@ class Configuration implements ConfigurationInterface
             ->scalarNode('index')->end()
             ->end()
         ;
+
+        return $node;
+    }
+
+    /**
+     * @return ArrayNodeDefinition|\Symfony\Component\Config\Definition\Builder\NodeDefinition
+     */
+    protected function getPersistenceNode()
+    {
+        $builder = new TreeBuilder();
+        $node = $builder->root('persistence');
+
+        $node
+            ->validate()
+                ->ifTrue(function($v) { return isset($v['driver']) && 'propel' === $v['driver'] && isset($v['listener']); })
+                    ->thenInvalid('Propel doesn\'t support listeners')
+                ->ifTrue(function($v) { return isset($v['driver']) && 'propel' === $v['driver'] && isset($v['repository']); })
+                    ->thenInvalid('Propel doesn\'t support the "repository" parameter')
+            ->end()
+            ->children()
+                ->scalarNode('driver')
+                    ->validate()
+                    ->ifNotInArray($this->supportedDrivers)
+                        ->thenInvalid('The driver %s is not supported. Please choose one of '.json_encode($this->supportedDrivers))
+                    ->end()
+                ->end()
+                ->scalarNode('model')->end()
+                ->scalarNode('repository')->end()
+                ->scalarNode('identifier')->defaultValue('id')->end()
+                ->arrayNode('provider')
+                    ->children()
+                        ->scalarNode('query_builder_method')->defaultValue('createQueryBuilder')->end()
+                        ->scalarNode('batch_size')->defaultValue(100)->end()
+                        ->scalarNode('clear_object_manager')->defaultTrue()->end()
+                        ->scalarNode('service')->end()
+                    ->end()
+                ->end()
+                ->arrayNode('listener')
+                    ->children()
+                        ->scalarNode('insert')->defaultTrue()->end()
+                        ->scalarNode('update')->defaultTrue()->end()
+                        ->scalarNode('delete')->defaultTrue()->end()
+                        ->scalarNode('flush')->defaultTrue()->end()
+                        ->booleanNode('immediate')->defaultFalse()->end()
+                        ->scalarNode('logger')
+                            ->defaultFalse()
+                            ->treatNullLike('fos_elastica.logger')
+                            ->treatTrueLike('fos_elastica.logger')
+                        ->end()
+                        ->scalarNode('service')->end()
+                    ->end()
+                ->end()
+                ->arrayNode('finder')
+                    ->children()
+                        ->scalarNode('service')->end()
+                    ->end()
+                ->end()
+                ->arrayNode('elastica_to_model_transformer')
+                    ->addDefaultsIfNotSet()
+                    ->children()
+                        ->scalarNode('hydrate')->defaultTrue()->end()
+                        ->scalarNode('ignore_missing')->defaultFalse()->end()
+                        ->scalarNode('query_builder_method')->defaultValue('createQueryBuilder')->end()
+                        ->scalarNode('service')->end()
+                    ->end()
+                ->end()
+                ->arrayNode('model_to_elastica_transformer')
+                    ->addDefaultsIfNotSet()
+                    ->children()
+                        ->scalarNode('service')->end()
+                    ->end()
+                ->end()
+            ->end();
+
+        return $node;
+    }
+
+    /**
+     * @return ArrayNodeDefinition|\Symfony\Component\Config\Definition\Builder\NodeDefinition
+     */
+    protected function getSerializerNode()
+    {
+        $builder = new TreeBuilder();
+        $node = $builder->root('serializer');
+
+        $node
+            ->addDefaultsIfNotSet()
+            ->children()
+                ->arrayNode('groups')
+                    ->treatNullLike(array())
+                    ->prototype('scalar')->end()
+                ->end()
+                ->scalarNode('version')->end()
+            ->end();
 
         return $node;
     }

@@ -7,7 +7,7 @@ A) Install FOSElasticaBundle
 FOSElasticaBundle is installed using [Composer](https://getcomposer.org).
 
 ```bash
-$ php composer.phar require friendsofsymfony/elastica-bundle "3.0.*"
+$ php composer.phar require friendsofsymfony/elastica-bundle "3.0.*@alpha"
 ```
 
 ### Elasticsearch
@@ -114,9 +114,9 @@ Below is an example for the Doctrine ORM.
                         driver: orm
                         model: Acme\ApplicationBundle\Entity\User
                         provider: ~
-                        listener: ~
+                        listener:
+                            immediate: ~
                         finder: ~
-                        immediate: ~
 ```
 
 There are a significant number of options available for types, that can be

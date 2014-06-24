@@ -65,7 +65,7 @@ You can now use the index wide finder service `fos_elastica.finder.website`:
 
 ```php
 /** var FOS\ElasticaBundle\Finder\MappedFinder */
-$finder = $container->get('fos_elastica.finder.website');
+$finder = $this->container->get('fos_elastica.finder.website');
 
 // Returns a mixed array of any objects mapped
 $results = $finder->find('bob');
@@ -91,7 +91,7 @@ An example for using a repository:
 
 ```php
 /** var FOS\ElasticaBundle\Manager\RepositoryManager */
-$repositoryManager = $container->get('fos_elastica.manager');
+$repositoryManager = $this->container->get('fos_elastica.manager');
 
 /** var FOS\ElasticaBundle\Repository */
 $repository = $repositoryManager->getRepository('UserBundle:User');
@@ -112,9 +112,33 @@ circumstances this is not ideal and you'd prefer to use a different method to jo
 any entity relations that are required on the page that will be displaying the results.
 
 ```yaml
-                user:
+            user:
+                persistence:
                     elastica_to_model_transformer:
                         query_builder_method: createSearchQueryBuilder
+```
+
+An example for using a custom query builder method:
+
+```php
+class UserRepository extends EntityRepository
+{
+    /**
+     * Used by Elastica to transform results to model
+     * 
+     * @param string $entityAlias
+     * @return  Doctrine\ORM\QueryBuilder
+     */
+    public function createSearchQueryBuilder($entityAlias)
+    {
+        $qb = $this->createQueryBuilder($entityAlias);
+        
+        $qb->select($entityAlias, 'g')
+            ->innerJoin($entityAlias.'.groups', 'g');
+            
+        return $qb;
+    }
+}
 ```
 
 Advanced Searching Example
@@ -160,7 +184,7 @@ The following code will execute a search against the Elasticsearch server:
 $finder = $this->container->get('fos_elastica.finder.site.article');
 $boolQuery = new \Elastica\Query\Bool();
 
-$fieldQuery = new \Elastica\Query\Text();
+$fieldQuery = new \Elastica\Query\Match();
 $fieldQuery->setFieldQuery('title', 'I am a title string');
 $fieldQuery->setFieldParam('title', 'analyzer', 'my_analyzer');
 $boolQuery->addShould($fieldQuery);

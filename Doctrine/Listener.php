@@ -6,10 +6,9 @@ use Doctrine\Common\EventArgs;
 use Doctrine\Common\EventSubscriber;
 use FOS\ElasticaBundle\Persister\ObjectPersisterInterface;
 use FOS\ElasticaBundle\Persister\ObjectPersister;
-use Symfony\Component\ExpressionLanguage\Expression;
-use Symfony\Component\ExpressionLanguage\ExpressionLanguage;
-use Symfony\Component\ExpressionLanguage\SyntaxError;
+use FOS\ElasticaBundle\Provider\IndexableInterface;
 use Symfony\Component\PropertyAccess\PropertyAccess;
+use Symfony\Component\PropertyAccess\PropertyAccessorInterface;
 
 /**
  * Automatically update ElasticSearch based on changes to the Doctrine source
@@ -25,13 +24,6 @@ class Listener implements EventSubscriber
     protected $objectPersister;
 
     /**
-     * Class of the domain model
-     *
-     * @var string
-     */
-    protected $objectClass;
-
-    /**
      * List of subscribed events
      *
      * @var array
@@ -39,18 +31,11 @@ class Listener implements EventSubscriber
     protected $events;
 
     /**
-     * Name of domain model field used as the ES identifier
+     * Configuration for the listener
      *
      * @var string
      */
-    protected $esIdentifierField;
-
-    /**
-     * Callback for determining if an object should be indexed
-     *
-     * @var mixed
-     */
-    protected $isIndexableCallback;
+    private $config;
 
     /**
      * Objects scheduled for insertion and replacement
@@ -64,13 +49,6 @@ class Listener implements EventSubscriber
     public $scheduledForDeletion = array();
 
     /**
-     * An instance of ExpressionLanguage
-     *
-     * @var ExpressionLanguage
-     */
-    protected $expressionLanguage;
-
-    /**
      * PropertyAccessor instance
      *
      * @var PropertyAccessorInterface
@@ -78,21 +56,37 @@ class Listener implements EventSubscriber
     protected $propertyAccessor;
 
     /**
+     * @var \FOS\ElasticaBundle\Provider\IndexableInterface
+     */
+    private $indexable;
+
+    /**
      * Constructor.
      *
      * @param ObjectPersisterInterface $objectPersister
-     * @param string                   $objectClass
-     * @param array                    $events
-     * @param string                   $esIdentifierField
+     * @param array $events
+     * @param IndexableInterface $indexable
+     * @param array $config
+     * @param null $logger
      */
-    public function __construct(ObjectPersisterInterface $objectPersister, $objectClass, array $events, $esIdentifierField = 'id')
-    {
-        $this->objectPersister     = $objectPersister;
-        $this->objectClass         = $objectClass;
-        $this->events              = $events;
-        $this->esIdentifierField   = $esIdentifierField;
+    public function __construct(
+        ObjectPersisterInterface $objectPersister,
+        array $events,
+        IndexableInterface $indexable,
+        array $config = array(),
+        $logger = null
+    ) {
+        $this->config = array_merge(array(
+            'identifier' => 'id',
+        ), $config);
+        $this->events = $events;
+        $this->indexable = $indexable;
+        $this->objectPersister = $objectPersister;
+        $this->propertyAccessor = PropertyAccess::createPropertyAccessor();
 
-        $this->propertyAccessor    = PropertyAccess::createPropertyAccessor();
+        if ($logger) {
+            $this->objectPersister->setLogger($logger);
+        }
     }
 
     /**
@@ -104,111 +98,39 @@ class Listener implements EventSubscriber
     }
 
     /**
-     * Set the callback for determining object index eligibility.
+     * Provides unified method for retrieving a doctrine object from an EventArgs instance
      *
-     * If callback is a string, it must be public method on the object class
-     * that expects no arguments and returns a boolean. Otherwise, the callback
-     * should expect the object for consideration as its only argument and
-     * return a boolean.
-     *
-     * @param  callback          $callback
-     * @throws \RuntimeException if the callback is not callable
+     * @param   EventArgs           $eventArgs
+     * @return  object              Entity | Document
+     * @throws  \RuntimeException   if no valid getter is found.
      */
-    public function setIsIndexableCallback($callback)
+    private function getDoctrineObject(EventArgs $eventArgs)
     {
-        if (is_string($callback)) {
-            if (!is_callable(array($this->objectClass, $callback))) {
-                if (false !== ($expression = $this->getExpressionLanguage())) {
-                    $callback = new Expression($callback);
-                    try {
-                        $expression->compile($callback, array($this->getExpressionVar()));
-                    } catch (SyntaxError $e) {
-                        throw new \RuntimeException(sprintf('Indexable callback %s::%s() is not callable or a valid expression.', $this->objectClass, $callback), 0, $e);
-                    }
-                } else {
-                    throw new \RuntimeException(sprintf('Indexable callback %s::%s() is not callable.', $this->objectClass, $callback));
-                }
-            }
-        } elseif (!is_callable($callback)) {
-            if (is_array($callback)) {
-                list($class, $method) = $callback + array(null, null);
-                if (is_object($class)) {
-                    $class = get_class($class);
-                }
-
-                if ($class && $method) {
-                    throw new \RuntimeException(sprintf('Indexable callback %s::%s() is not callable.', $class, $method));
-                }
-            }
-            throw new \RuntimeException('Indexable callback is not callable.');
+        if (method_exists($eventArgs, 'getObject')) {
+            return $eventArgs->getObject();
+        } elseif (method_exists($eventArgs, 'getEntity')) {
+            return $eventArgs->getEntity();
+        } elseif (method_exists($eventArgs, 'getDocument')) {
+            return $eventArgs->getDocument();
         }
 
-        $this->isIndexableCallback = $callback;
-    }
-
-    /**
-     * Return whether the object is indexable with respect to the callback.
-     *
-     * @param  object  $object
-     * @return boolean
-     */
-    protected function isObjectIndexable($object)
-    {
-        if (!$this->isIndexableCallback) {
-            return true;
-        }
-
-        if ($this->isIndexableCallback instanceof Expression) {
-            return $this->getExpressionLanguage()->evaluate($this->isIndexableCallback, array($this->getExpressionVar($object) => $object));
-        }
-
-        return is_string($this->isIndexableCallback)
-            ? call_user_func(array($object, $this->isIndexableCallback))
-            : call_user_func($this->isIndexableCallback, $object);
-    }
-
-    /**
-     * @param  mixed  $object
-     * @return string
-     */
-    private function getExpressionVar($object = null)
-    {
-        $class = $object ?: $this->objectClass;
-        $ref = new \ReflectionClass($class);
-
-        return strtolower($ref->getShortName());
-    }
-
-    /**
-     * @return bool|ExpressionLanguage
-     */
-    private function getExpressionLanguage()
-    {
-        if (null === $this->expressionLanguage) {
-            if (!class_exists('Symfony\Component\ExpressionLanguage\ExpressionLanguage')) {
-                return false;
-            }
-
-            $this->expressionLanguage = new ExpressionLanguage();
-        }
-
-        return $this->expressionLanguage;
+        throw new \RuntimeException('Unable to retrieve object from EventArgs.');
     }
 
     public function postPersist(EventArgs $eventArgs)
     {
-        $entity = $eventArgs->getEntity();
+        $entity = $this->getDoctrineObject($eventArgs);
 
-        if ($entity instanceof $this->objectClass && $this->isObjectIndexable($entity)) {
+        if ($this->objectPersister->handlesObject($entity) && $this->isObjectIndexable($entity)) {
             $this->scheduledForInsertion[] = $entity;
         }
     }
 
     public function postUpdate(EventArgs $eventArgs)
     {
-        $entity = $eventArgs->getEntity();
+        $entity = $this->getDoctrineObject($eventArgs);
 
-        if ($entity instanceof $this->objectClass) {
+        if ($this->objectPersister->handlesObject($entity)) {
             if ($this->isObjectIndexable($entity)) {
                 $this->scheduledForUpdate[] = $entity;
             } else {
@@ -224,26 +146,30 @@ class Listener implements EventSubscriber
      */
     public function preRemove(EventArgs $eventArgs)
     {
-        $entity = $eventArgs->getEntity();
+        $entity = $this->getDoctrineObject($eventArgs);
 
-        if ($entity instanceof $this->objectClass) {
+        if ($this->objectPersister->handlesObject($entity)) {
             $this->scheduleForDeletion($entity);
         }
     }
 
     /**
      * Persist scheduled objects to ElasticSearch
+     * After persisting, clear the scheduled queue to prevent multiple data updates when using multiple flush calls
      */
     private function persistScheduled()
     {
         if (count($this->scheduledForInsertion)) {
             $this->objectPersister->insertMany($this->scheduledForInsertion);
+            $this->scheduledForInsertion = array();
         }
         if (count($this->scheduledForUpdate)) {
             $this->objectPersister->replaceMany($this->scheduledForUpdate);
+            $this->scheduledForUpdate = array();
         }
         if (count($this->scheduledForDeletion)) {
             $this->objectPersister->deleteManyByIdentifiers($this->scheduledForDeletion);
+            $this->scheduledForDeletion = array();
         }
     }
 
@@ -272,8 +198,23 @@ class Listener implements EventSubscriber
      */
     protected function scheduleForDeletion($object)
     {
-        if ($identifierValue = $this->propertyAccessor->getValue($object, $this->esIdentifierField)) {
+        if ($identifierValue = $this->propertyAccessor->getValue($object, $this->config['identifier'])) {
             $this->scheduledForDeletion[] = $identifierValue;
         }
+    }
+
+    /**
+     * Checks if the object is indexable or not.
+     *
+     * @param object $object
+     * @return bool
+     */
+    private function isObjectIndexable($object)
+    {
+        return $this->indexable->isObjectIndexable(
+            $this->config['indexName'],
+            $this->config['typeName'],
+            $object
+        );
     }
 }
