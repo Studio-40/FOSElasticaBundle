@@ -9,25 +9,17 @@
  * file that was distributed with this source code.
  */
 
-namespace FOS\ElasticaBundle\Tests\Functional;
+namespace FOS\ElasticaBundle\Tests\Functional\app\ORM;
 
-class TypeObj
+class IndexableService
 {
-    public $coll;
-    public $field1;
-
-    public function isIndexable()
+    public function isIndexable($object)
     {
         return true;
     }
 
-    public function isntIndexable()
+    public static function isntIndexable($object)
     {
         return false;
-    }
-
-    public function getSerializableColl()
-    {
-        return iterator_to_array($this->coll, false);
     }
 }

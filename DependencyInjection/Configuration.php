@@ -73,27 +73,28 @@ class Configuration implements ConfigurationInterface
                 ->arrayNode('clients')
                     ->useAttributeAsKey('id')
                     ->prototype('array')
-                        ->performNoDeepMerging()
+                        // BC - Renaming 'servers' node to 'connections'
                         ->beforeNormalization()
-                            ->ifTrue(function($v) { return (isset($v['host']) && isset($v['port'])) || isset($v['url']); })
-                            ->then(function($v) {
-                                return array(
-                                    'servers' => array(
-                                        array(
-                                            'host' => isset($v['host']) ? $v['host'] : null,
-                                            'port' => isset($v['port']) ? $v['port'] : null,
-                                            'url' => isset($v['url']) ? $v['url'] : null,
-                                            'logger' => isset($v['logger']) ? $v['logger'] : null,
-                                            'headers' => isset($v['headers']) ? $v['headers'] : null,
-                                            'timeout' => isset($v['timeout']) ? $v['timeout'] : null,
-                                            'transport' => isset($v['transport']) ? $v['transport'] : null,
-                                        )
-                                    )
-                                );
-                            })
+                        ->ifTrue(function($v) { return isset($v['servers']); })
+                        ->then(function($v) {
+                            $v['connections'] = $v['servers'];
+                            unset($v['servers']);
+
+                            return $v;
+                        })
+                        ->end()
+                        // If there is no connections array key defined, assume a single connection.
+                        ->beforeNormalization()
+                        ->ifTrue(function ($v) { return is_array($v) && !array_key_exists('connections', $v); })
+                        ->then(function ($v) {
+                            return array(
+                                'connections' => array($v)
+                            );
+                        })
                         ->end()
                         ->children()
-                            ->arrayNode('servers')
+                            ->arrayNode('connections')
+                                ->requiresAtLeastOneElement()
                                 ->prototype('array')
                                     ->fixXmlConfig('header')
                                     ->children()
@@ -189,6 +190,7 @@ class Configuration implements ConfigurationInterface
                     return $v;
                 })
                 ->end()
+                // BC - Support the old is_indexable_callback property
                 ->beforeNormalization()
                 ->ifTrue(function ($v) {
                     return isset($v['persistence']) &&
@@ -202,10 +204,29 @@ class Configuration implements ConfigurationInterface
                     return $v;
                 })
                 ->end()
+                // Support multiple dynamic_template formats to match the old bundle style
+                // and the way ElasticSearch expects them
+                ->beforeNormalization()
+                ->ifTrue(function ($v) { return isset($v['dynamic_templates']); })
+                ->then(function ($v) {
+                    $dt = array();
+                    foreach ($v['dynamic_templates'] as $key => $type) {
+                        if (is_int($key)) {
+                            $dt[] = $type;
+                        } else { 
+                            $dt[][$key] = $type;
+                        }
+                    }
+
+                    $v['dynamic_templates'] = $dt;
+
+                    return $v;
+                })
+                ->end()
                 ->children()
                     ->scalarNode('index_analyzer')->end()
                     ->scalarNode('search_analyzer')->end()
-                    ->scalarNode('indexable_callback')->end()
+                    ->variableNode('indexable_callback')->end()
                     ->append($this->getPersistenceNode())
                     ->append($this->getSerializerNode())
                 ->end()
@@ -250,16 +271,21 @@ class Configuration implements ConfigurationInterface
         $node = $builder->root('dynamic_templates');
 
         $node
-            ->useAttributeAsKey('name')
             ->prototype('array')
-                ->children()
-                    ->scalarNode('match')->end()
-                    ->scalarNode('unmatch')->end()
-                    ->scalarNode('match_mapping_type')->end()
-                    ->scalarNode('path_match')->end()
-                    ->scalarNode('path_unmatch')->end()
-                    ->scalarNode('match_pattern')->end()
-                    ->append($this->getPropertiesNode())
+                ->prototype('array')
+                    ->children()
+                        ->scalarNode('match')->end()
+                        ->scalarNode('unmatch')->end()
+                        ->scalarNode('match_mapping_type')->end()
+                        ->scalarNode('path_match')->end()
+                        ->scalarNode('path_unmatch')->end()
+                        ->scalarNode('match_pattern')->end()
+                        ->arrayNode('mapping')
+                            ->prototype('variable')
+                                ->treatNullLike(array())
+                            ->end()
+                        ->end()
+                    ->end()
                 ->end()
             ->end()
         ;
